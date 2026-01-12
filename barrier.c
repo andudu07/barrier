@@ -1,44 +1,75 @@
-// barrier_pthread.c
-#define _POSIX_C_SOURCE 200809L
+// barrier.c
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-#define NTHRS 5
+typedef struct barrier {
+    int n;
+    int arrived;
+    pthread_mutex_t mtx;
+    sem_t sem;
+} barrier_t;
 
-static pthread_barrier_t bar;
+static barrier_t B;
+
+static void barrier_init(barrier_t *b, int n)
+{
+    b->n = n;
+    b->arrived = 0;
+    pthread_mutex_init(&b->mtx, NULL);
+    sem_init(&b->sem, 0, 0);
+}
+
+static void barrier_destroy(barrier_t *b)
+{
+    sem_destroy(&b->sem);
+    pthread_mutex_destroy(&b->mtx);
+}
+
+static void barrier_point(barrier_t *b)
+{
+    pthread_mutex_lock(&b->mtx);
+    b->arrived++;
+
+    if (b->arrived == b->n) {
+        // ultimul thread  ii deblocheaza pe ceilalti (n-1 semnale)
+        for (int i = 0; i < b->n - 1; i++) {
+            sem_post(&b->sem);
+        }
+        pthread_mutex_unlock(&b->mtx);
+        return; // ultimul thread trece direct
+    }
+
+    pthread_mutex_unlock(&b->mtx);
+
+    // ceilalti asteapta pana cand ultimul thread da drumul barierei
+    sem_wait(&b->sem);
+}
 
 static void *tfun(void *v)
 {
     int tid = *(int *)v;
-    free(v);
 
     usleep((rand() % 200) * 1000);
 
     printf("%d reached the barrier\n", tid);
-    fflush(stdout);
-
-    int rc = pthread_barrier_wait(&bar);
-    if (rc != 0 && rc != PTHREAD_BARRIER_SERIAL_THREAD) {
-        fprintf(stderr, "pthread_barrier_wait failed: %d\n", rc);
-        return NULL;
-    }
-
+    barrier_point(&B);
     printf("%d passed the barrier\n", tid);
-    fflush(stdout);
 
+    free(v);
     return NULL;
 }
+
+#define NTHRS 5
 
 int main(void)
 {
     srand(12345);
 
-    if (pthread_barrier_init(&bar, NULL, NTHRS) != 0) {
-        perror("pthread_barrier_init");
-        return 1;
-    }
+    printf("NTHRS=%d\n", NTHRS);
+    barrier_init(&B, NTHRS);
 
     pthread_t th[NTHRS];
     for (int i = 0; i < NTHRS; i++) {
@@ -52,10 +83,11 @@ int main(void)
         }
     }
 
-    for (int i = 0; i < NTHRS; i++)
+    for (int i = 0; i < NTHRS; i++) {
         pthread_join(th[i], NULL);
+    }
 
-    pthread_barrier_destroy(&bar);
+    barrier_destroy(&B);
     return 0;
 }
 
